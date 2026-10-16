@@ -26,16 +26,16 @@ assert m.fmt_min(1440 + 45) == "00:45+1" and m.fmt_min(458) == "07:38"
 
 # --- config
 cfg = m.load_config(None)
-assert len(cfg["scenarios"]) == 7 and all(s["via"] == "Frankfurt(Main)Hbf" and s["changes"] == 1 for s in cfg["scenarios"])
+assert len(cfg["scenarios"]) == 7 and all(s["via"] == "" and s["max_changes"] == 2 for s in cfg["scenarios"])
 
 # --- fixtures
 def leg(name, prod, von, nach, ab, an, day="2026-10-22", day_an=None):
     return {"verkehrsmittel": {"produktGattung": prod, "name": name}, "abfahrtsOrt": von, "ankunftsOrt": nach,
             "abfahrt": {"sollzeit": f"{day}T{ab}:00"}, "ankunft": {"sollzeit": f"{day_an or day}T{an}:00"}}
-def conn(tid, price, umst, legs):
+def conn(tid, price, umst, legs, dur_s=14000):
     return {"abPreis": {"betrag": price} if price is not None else None, "klasse": "KLASSE_2",
             "verbindung": {"tripId": tid, "ctxRecon": "ctx-" + tid, "umstiegsAnzahl": umst,
-                           "verbindungsDauerInSeconds": 14000, "verbindungsAbschnitte": legs}}
+                           "verbindungsDauerInSeconds": dur_s, "verbindungsAbschnitte": legs}}
 
 def out_day(day):  # Aachen -> Göttingen, the real every-2h pattern
     conns = []
@@ -49,6 +49,19 @@ def out_day(day):  # Aachen -> Göttingen, the real every-2h pattern
                                                leg("ICE 1000", "ICE", "Frankfurt(Main)Hbf", "Göttingen", "23:58", "01:31", day, day_an=next_day(day))]))
     conns.append(conn(f"o{day}koeln", 5.0, 1, [leg("RE 1", "REGIONAL", "Aachen Hbf", "Köln Hbf", "16:00", "17:00", day),
                                                leg("ICE 9", "ICE", "Köln Hbf", "Göttingen", "17:10", "20:00", day)]))
+    # diversion-style ones: 2 changes all-ICE via Köln + Hannover (kept), 3 changes all-ICE (dropped, despite 4 EUR)
+    conns.append(conn(f"o{day}k2", 45.0, 2, [leg("ICE 9001", "ICE", "Aachen Hbf", "Köln Hbf", "16:21", "17:00", day),
+                                             leg("ICE 9002", "ICE", "Köln Hbf", "Hannover Hbf", "17:15", "19:50", day),
+                                             leg("ICE 9003", "ICE", "Hannover Hbf", "Göttingen", "20:10", "20:45", day)]))
+    conns.append(conn(f"o{day}k3", 4.0, 3, [leg("ICE 9101", "ICE", "Aachen Hbf", "Köln Hbf", "16:50", "17:30", day),
+                                            leg("ICE 9102", "ICE", "Köln Hbf", "Dortmund Hbf", "17:40", "18:50", day),
+                                            leg("ICE 9103", "ICE", "Dortmund Hbf", "Hannover Hbf", "19:00", "20:40", day),
+                                            leg("ICE 9104", "ICE", "Hannover Hbf", "Göttingen", "20:50", "21:25", day)]))
+    # overnight routing, 2 changes all-ICE but 7h09 > max_duration_h (dropped, despite 3 EUR)
+    conns.append(conn(f"o{day}night", 3.0, 2, [leg("ICE 319", "ICE", "Aachen Hbf", "Köln Hbf", "21:36", "22:15", day),
+                                               leg("ICE 1272", "ICE", "Köln Hbf", "Hannover Hbf", "22:40", "01:30", day, day_an=next_day(day)),
+                                               leg("IC 60470", "EC_IC", "Hannover Hbf", "Göttingen", "03:50", "04:45", next_day(day))],
+                      dur_s=7 * 3600 + 9 * 60))
     return {"intervalle": [{"verbindungen": conns}]}
 
 def back_day(day):  # Göttingen -> Aachen
@@ -71,7 +84,7 @@ def fake_http(method, path, payload=None, **kw):
         return [{"type": "ST", "name": nm, "id": f"A=1@O={nm}@X=1@Y=2@U=80@L=800@p=99@i=xx@"}]
     if path == "/angebote/tagesbestpreis":
         day = payload["anfrageZeitpunkt"][:10]
-        assert payload["zwischenhalte"][0]["id"].startswith("A=1@O=Frankfurt(Main)Hbf@")
+        assert payload["zwischenhalte"] == []   # no via: diversions with other change stations must come back
         return out_day(day) if "Aachen" in payload["abfahrtsHalt"] else back_day(day)
     if path == "/angebote/recon":
         return {"verbindungen": [{"reiseAngebote": [{"name": "Super Sparpreis", "klasse": "KLASSE_2", "typ": "REISEANGEBOT",
@@ -94,21 +107,24 @@ printed = buf.getvalue()
 print(printed)
 assert rc == 10, rc   # the 9.99 late train on Thu/Fri? no: Thu/Fri scenarios have earliest_dep -> 21:38 late train qualifies (9.99 <= 20)
 
-# request dedupe: 3 station lookups, 7 route-days (Thu A->G, Fri A->G, Sun A->G, Mon A->G, Mon G->A, Sun G->A, Fri G->A)
+# request dedupe: 2 station lookups (no via), 7 route-days (Thu A->G, Fri A->G, Sun A->G, Mon A->G, Mon G->A, Sun G->A, Fri G->A)
 assert calls.count("/angebote/tagesbestpreis") == 7, calls.count("/angebote/tagesbestpreis")
-assert sum(1 for c in calls if c.startswith("/reiseloesung/orte")) == 3
+assert sum(1 for c in calls if c.startswith("/reiseloesung/orte")) == 2
 
 with open(out) as f:
     rows = list(csv.DictReader(f))
 by = {}
 for r in rows: by.setdefault(r["scenario"], []).append(r)
 assert set(by) == {"R-out-Thu", "R-out-Fri", "R-back-Mon", "R-back-Sun", "P-out-Fri", "P-back-Sun", "P-back-Mon"}, set(by)
-# R-out-Thu: dep >= 15:30 -> 15:38, 17:38, 21:38(late)  ; Köln-change excluded (REGIONAL + wrong station)
-assert [r["dep"] for r in by["R-out-Thu"]] == ["15:38", "17:38", "21:38"], [r["dep"] for r in by["R-out-Thu"]]
-assert by["R-out-Thu"][2]["arr"] == "01:31+1" and by["R-out-Thu"][2]["below_threshold"] == "True"
+# R-out-Thu: dep >= 15:30 -> 15:38, 16:21 (2 changes), 17:38, 21:38(late) ; RE-to-Köln one excluded (REGIONAL),
+# 3-change one excluded (> max_changes)
+assert [r["dep"] for r in by["R-out-Thu"]] == ["15:38", "16:21", "17:38", "21:38"], [r["dep"] for r in by["R-out-Thu"]]
+assert by["R-out-Thu"][3]["arr"] == "01:31+1" and by["R-out-Thu"][3]["below_threshold"] == "True"
+assert by["R-out-Thu"][1]["changes"] == "2" and by["R-out-Thu"][1]["change_station"] == "Köln Hbf / Hannover Hbf"
+assert by["R-out-Thu"][0]["change_station"] == "Frankfurt(Main)Hbf"
 assert all(r["travel_date"] == "2026-10-22" for r in by["R-out-Thu"])
 # R-out-Fri: dep >= 13:30 -> 13:38 .. 21:38
-assert [r["dep"] for r in by["R-out-Fri"]] == ["13:38", "15:38", "17:38", "21:38"]
+assert [r["dep"] for r in by["R-out-Fri"]] == ["13:38", "15:38", "16:21", "17:38", "21:38"]
 # R-back-Mon: dep <= 13:00 and arr <= 20:00 -> 06:27..12:27 (arr 16:22)
 assert [r["dep"] for r in by["R-back-Mon"]] == ["06:27", "08:27", "10:27", "12:27"], [r["dep"] for r in by["R-back-Mon"]]
 assert all(r["travel_date"] == "2026-10-19" and r["route"] == "Göttingen -> Aachen Hbf" for r in by["R-back-Mon"])
@@ -116,12 +132,51 @@ assert all(r["travel_date"] == "2026-10-19" and r["route"] == "Göttingen -> Aac
 assert [r["dep"] for r in by["R-back-Sun"]] == ["16:27", "18:27"]
 # P-out-Fri: dep >= 14:00 -> 14:27, 16:27, 18:27
 assert [r["dep"] for r in by["P-out-Fri"]] == ["14:27", "16:27", "18:27"]
-# P-back-Sun: Aachen->Göttingen dep >= 16:00 -> 17:38, 21:38
-assert [r["dep"] for r in by["P-back-Sun"]] == ["17:38", "21:38"]
+# P-back-Sun: Aachen->Göttingen dep >= 16:00 -> 16:21 (2 changes), 17:38, 21:38
+assert [r["dep"] for r in by["P-back-Sun"]] == ["16:21", "17:38", "21:38"]
 # P-back-Mon: dep <= 08:00 -> 07:38 only
 assert [r["dep"] for r in by["P-back-Mon"]] == ["07:38"] and by["P-back-Mon"][0]["travel_date"] == "2026-10-19"
 # offer lookup ran for cheapest per scenario-day (+ anything <= 30): labels captured
-assert by["R-out-Thu"][2]["offer_labels"] == "AKTION" and by["R-out-Thu"][2]["list_price_eur"] == "2"
+assert by["R-out-Thu"][3]["offer_labels"] == "AKTION" and by["R-out-Thu"][3]["list_price_eur"] == "2"
+# an explicit via still restricts to connections changing there (any of the change stations)
+k2 = {"changes": 2, "change_station": "Köln Hbf / Hannover Hbf", "products": "ICE", "_dep_m": 600, "_arr_m": 900}
+assert m.matches(k2, {"via": "", "max_changes": 2}) and not m.matches(k2, {"via": "", "max_changes": 1})
+assert m.matches(k2, {"via": "Hannover Hbf", "max_changes": 2}) and not m.matches(k2, {"via": "Frankfurt(Main)Hbf", "max_changes": 2})
+# max_duration_h: duration_min wins; without it, arr - dep; 0/None disables the cap
+assert all(s["max_duration_h"] == 6 for s in cfg["scenarios"])
+assert not m.matches(dict(k2, duration_min=361), {"max_changes": 2, "max_duration_h": 6})
+assert m.matches(dict(k2, duration_min=360), {"max_changes": 2, "max_duration_h": 6})
+assert m.matches(dict(k2, duration_min=0), {"max_changes": 2, "max_duration_h": 6})                      # 900-600 = 300
+assert not m.matches(dict(k2, duration_min=0, _arr_m=1000), {"max_changes": 2, "max_duration_h": 6})     # 400 min
+assert m.matches(dict(k2, duration_min=500), {"max_changes": 2, "max_duration_h": 0})
+assert not any(r["trip_id"].endswith("night") for r in rows)
+
+# offer lookup blocked on its first call: all price searches still ran and every scenario is still logged;
+# lookups go cheapest-first (the 9.99 late train) and the blocked lookup is not retried for later rows
+calls.clear(); recon_ctx = []
+def fake_http_recon_blocked(method, path, payload=None, **kw):
+    if path == "/angebote/recon":
+        calls.append(path); recon_ctx.append(payload["ctxRecon"])
+        raise m.RateLimited("HTTP 403 OPS_BLOCKED")
+    return fake_http(method, path, payload, **kw)
+m.http_json = fake_http_recon_blocked
+out_b = os.path.join(tmp, "blocked.csv")
+sys.argv = ["x", "--out", out_b, "--sleep", "0"]
+err = io.StringIO()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+    rc = m.main()
+assert rc == 10, rc   # the alert still goes out
+assert calls.count("/angebote/tagesbestpreis") == 7 and recon_ctx == ["ctx-o2026-10-22late"], (calls, recon_ctx)
+assert "skipping remaining offer lookups" in err.getvalue()
+with open(out_b) as f:
+    rows_b = list(csv.DictReader(f))
+assert {r["scenario"] for r in rows_b} == set(by) and len(rows_b) == len(rows), len(rows_b)
+assert all(r["offer_name"] == "" for r in rows_b)
+# same, but nothing below threshold -> exit 2 (rate-limited), rows still written
+sys.argv = ["x", "--out", out_b, "--sleep", "0", "--threshold", "1"]
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    assert m.main() == 2
+m.http_json = fake_http
 
 # --only + --dates
 calls.clear()

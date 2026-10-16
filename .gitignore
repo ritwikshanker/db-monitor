@@ -165,4 +165,6 @@ cython_debug/
 
 .idea
 
+db_prices.csv
+crontab.bak.txt
 

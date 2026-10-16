@@ -2,7 +2,7 @@
 """
 db_lastminute_monitor.py — log bahn.de prices for a set of weekly travel scenarios.
 
-Each *scenario* = route (origin -> destination, optional via, exact number of changes),
+Each *scenario* = route (origin -> destination, optional via, maximum number of changes),
 a weekday, and a departure/arrival time window. For every run the script resolves the
 scenarios onto the dates of the *following* week (the week the Last-Minute Super Sparpreis
 is sold for on Sat/Sun), fetches each (route, date) once, applies every scenario's window,
@@ -17,7 +17,9 @@ Built-in scenarios (edit with --write-config / --config scenarios.json):
   P-out-Fri   Göttingen  -> Aachen Hbf  Fri  dep >= 14:00 (after half a workday)
   P-back-Sun  Aachen Hbf -> Göttingen   Sun  dep >= 16:00 (last trains)
   P-back-Mon  Aachen Hbf -> Göttingen   Mon  dep <= 08:00 (first trains)
-All: exactly 1 change at Frankfurt(Main)Hbf, ICE/EC/IC legs only, 2nd class, 1 adult, BahnCard 25.
+All: at most 2 changes (anywhere: Frankfurt, Köln, Hannover, ...), at most 6 h door-to-door
+(drops overnight routings), ICE/EC/IC legs only, 2nd class, 1 adult, BahnCard 25. Searched without a via station, so diversions (e.g. Sun 25 Oct 2026: no
+1-change Frankfurt connection, 2 changes via Köln/Hannover instead) still show up.
 
 Uses the same unofficial JSON endpoints the bahn.de website calls (no login needed).
 Python >= 3.9. Transports (--transport, default auto = first available):
@@ -127,7 +129,8 @@ CSV_FIELDS = [
 
 DEFAULT_CONFIG = {
     "traveller": {"bahncard": "BAHNCARD25", "klasse": "KLASSE_2"},
-    "defaults": {"via": "Frankfurt(Main)Hbf", "changes": 1, "long_distance_only": True, "threshold_eur": 20.0},
+    "defaults": {"via": "", "max_changes": 2, "max_duration_h": 6, "long_distance_only": True,
+                 "threshold_eur": 20.0},
     "scenarios": [
         {"name": "R-out-Thu", "from": "Aachen Hbf", "to": "Göttingen", "weekday": "Thu", "earliest_dep": "15:30"},
         {"name": "R-out-Fri", "from": "Aachen Hbf", "to": "Göttingen", "weekday": "Fri", "earliest_dep": "13:30"},
@@ -530,7 +533,8 @@ def load_config(path: str | None) -> dict:
     d = cfg["defaults"]
     for s in cfg["scenarios"]:
         s.setdefault("via", d["via"])
-        s.setdefault("changes", d["changes"])
+        s.setdefault("max_changes", d["max_changes"])
+        s.setdefault("max_duration_h", d["max_duration_h"])
         s.setdefault("long_distance_only", d["long_distance_only"])
         s.setdefault("threshold_eur", d["threshold_eur"])
         if s.get("weekday") not in WEEKDAYS and s.get("weekday") is not None:
@@ -609,7 +613,7 @@ def parse_day(resp: dict, day: date) -> list[dict]:
                 "_dep_m": dep_m, "_arr_m": arr_m,
                 "duration_min": round((v.get("verbindungsDauerInSeconds") or 0) / 60),
                 "trains": " + ".join(" ".join(l["verkehrsmittel"]["name"].split()) for l in legs),
-                "change_station": legs[0].get("ankunftsOrt", "") if len(legs) > 1 else "",
+                "change_station": " / ".join(l.get("ankunftsOrt", "") for l in legs[:-1]),
                 "changes": v.get("umstiegsAnzahl"),
                 "products": ",".join(sorted({l["verkehrsmittel"].get("produktGattung", "?") for l in legs})),
                 "price_eur": (c.get("abPreis") or {}).get("betrag"),
@@ -623,16 +627,19 @@ def parse_day(resp: dict, day: date) -> list[dict]:
 
 
 def matches(row: dict, sc: dict) -> bool:
-    if row["changes"] != sc["changes"]:
+    if row["changes"] is None or row["changes"] > sc["max_changes"]:
         return False
     via = sc.get("via") or ""
-    if sc["changes"] >= 1 and via:
+    if via:
         prefix = via.split("(")[0].lower()          # "Frankfurt(Main)Hbf" -> "frankfurt"
-        if not row["change_station"].lower().startswith(prefix):
+        if not any(s.lower().startswith(prefix) for s in row["change_station"].split(" / ")):
             return False
     if sc.get("long_distance_only", True) and not set(row["products"].split(",")) <= LONG_DISTANCE:
         return False
     dep, arr = row["_dep_m"], row["_arr_m"]
+    dur = row.get("duration_min") or (arr - dep if dep is not None and arr is not None else None)
+    if sc.get("max_duration_h") and dur is not None and dur > sc["max_duration_h"] * 60:
+        return False
     lo, hi, la = to_minutes(sc.get("earliest_dep")), to_minutes(sc.get("latest_dep")), to_minutes(sc.get("latest_arr"))
     if lo is not None and (dep is None or dep < lo):
         return False
@@ -826,8 +833,9 @@ def run(args) -> int:
         print(f"[error] station lookup failed: {e}", file=sys.stderr)
         return 2
 
-    all_rows: list[dict] = []
-    failures, blocked = 0, False
+    # 1) every price search first, so a blocked offer lookup can never cost a scenario its prices
+    groups: list[tuple[dict, date, str, list[dict]]] = []   # (scenario, day, route, matching rows)
+    failures, blocked, offers_blocked = 0, False, False
     for key in sorted(jobs, key=lambda k: (k[3], k[0], k[1])):
         origin, dest, via, day = key
         from_id, from_name = stations.get(origin)
@@ -851,42 +859,55 @@ def run(args) -> int:
         for sc in jobs[key]:
             sc_rows = [dict(r) for r in day_rows if matches(r, sc)]
             sc_rows.sort(key=lambda r: (r["price_eur"] is None, r["price_eur"] or 0))
-            if not args.no_offers and not blocked:
-                for i, r in enumerate(sc_rows):
-                    p = r["price_eur"]
-                    if (i == 0 or (p is not None and p <= args.offers_below)) and r.get("_ctx"):
-                        time.sleep(args.sleep)
-                        try:
-                            name, price, strike, labels = fetch_offers(r["_ctx"], reisende, klasse)
-                            r["offer_name"], r["list_price_eur"], r["offer_labels"] = name, strike, labels
-                            if r["price_eur"] is None and price is not None:
-                                r["price_eur"] = price
-                        except RateLimited as e:
-                            print(f"[warn] {e} — skipping remaining offer lookups this run.", file=sys.stderr)
-                            blocked = True
-                            break
-                        except Exception as e:
-                            print(f"[warn] offer lookup failed ({sc['name']} {day} {r['trains']}): {e}", file=sys.stderr)
-            for r in sc_rows:
-                r["run_time"] = run_time
-                r["scenario"] = sc["name"]
-                r["route"] = route
-                r["days_ahead"] = (day - today).days
-                r["below_threshold"] = r["price_eur"] is not None and r["price_eur"] <= sc["threshold_eur"]
-            sc_rows.sort(key=lambda r: r["_dep_m"] or 0)
-            all_rows.extend(sc_rows)
+            groups.append((sc, day, route, sc_rows))
 
-            prices = [r["price_eur"] for r in sc_rows if r["price_eur"] is not None]
-            log(f"  {sc['name']:<11} {day} {WEEKDAYS[day.weekday()]} {route}: {len(sc_rows)} conn."
-                + (f", {min(prices):.2f}-{max(prices):.2f} EUR" if prices else ", no prices"))
-            for r in sc_rows:
-                flag = "  <<< " if r["below_threshold"] else "      "
-                log(f"{flag}{r['dep']}-{r['arr']} {r['trains']:<22} "
-                    + (f"{r['price_eur']:>7.2f}" if r["price_eur"] is not None else "   n/a ")
-                    + (f"  {r['offer_name']}" if r["offer_name"] else "")
-                    + (f" [{r['offer_labels']}]" if r["offer_labels"] else ""))
-        if blocked:
-            break
+    # 2) offer names, best effort: cheapest of each scenario-day plus anything <= --offers-below,
+    #    cheapest first, one lookup per connection; the first OPS_BLOCKED ends the lookups, not the run
+    if not args.no_offers and not blocked:
+        todo = [r for _, _, _, sc_rows in groups for i, r in enumerate(sc_rows)
+                if r.get("_ctx") and (i == 0 or (r["price_eur"] is not None and r["price_eur"] <= args.offers_below))]
+        todo.sort(key=lambda r: (r["price_eur"] is None, r["price_eur"] or 0))
+        offers: dict[str, tuple | None] = {}
+        for r in todo:
+            ctx = r["_ctx"]
+            if ctx not in offers:
+                time.sleep(args.sleep)
+                try:
+                    offers[ctx] = fetch_offers(ctx, reisende, klasse)
+                except RateLimited as e:
+                    print(f"[warn] {e} — skipping remaining offer lookups this run.", file=sys.stderr)
+                    offers_blocked = True
+                    break
+                except Exception as e:
+                    print(f"[warn] offer lookup failed ({r['travel_date']} {r['trains']}): {e}", file=sys.stderr)
+                    offers[ctx] = None
+            if offers[ctx]:
+                name, price, strike, labels = offers[ctx]
+                r["offer_name"], r["list_price_eur"], r["offer_labels"] = name, strike, labels
+                if r["price_eur"] is None and price is not None:
+                    r["price_eur"] = price
+
+    # 3) annotate, report
+    all_rows: list[dict] = []
+    for sc, day, route, sc_rows in groups:
+        for r in sc_rows:
+            r["run_time"] = run_time
+            r["scenario"] = sc["name"]
+            r["route"] = route
+            r["days_ahead"] = (day - today).days
+            r["below_threshold"] = r["price_eur"] is not None and r["price_eur"] <= sc["threshold_eur"]
+        sc_rows.sort(key=lambda r: r["_dep_m"] or 0)
+        all_rows.extend(sc_rows)
+
+        prices = [r["price_eur"] for r in sc_rows if r["price_eur"] is not None]
+        log(f"  {sc['name']:<11} {day} {WEEKDAYS[day.weekday()]} {route}: {len(sc_rows)} conn."
+            + (f", {min(prices):.2f}-{max(prices):.2f} EUR" if prices else ", no prices"))
+        for r in sc_rows:
+            flag = "  <<< " if r["below_threshold"] else "      "
+            log(f"{flag}{r['dep']}-{r['arr']} {r['trains']:<22} "
+                + (f"{r['price_eur']:>7.2f}" if r["price_eur"] is not None else "   n/a ")
+                + (f"  {r['offer_name']}" if r["offer_name"] else "")
+                + (f" [{r['offer_labels']}]" if r["offer_labels"] else ""))
 
     # ---- CSV
     if all_rows:
@@ -910,7 +931,7 @@ def run(args) -> int:
         notify(f"DB fare alert: {hits[0]['price_eur']:.2f} EUR ({hits[0]['scenario']})", text,
                args.ntfy, args.macos_notify)
         return 10
-    if blocked or (failures and failures == len(jobs)):
+    if blocked or offers_blocked or (failures and failures == len(jobs)):
         return 2
     return 0
 

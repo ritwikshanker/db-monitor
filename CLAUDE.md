@@ -24,7 +24,8 @@ Price threshold for alerts: **€20** (he has BahnCard 25, 2nd class; adult).
   `curl_cffi` and `playwright` 1.64 (+ its chromium 1248) installed there; Google Chrome 155 is in
   /Applications. Cron must use that interpreter path, not `/usr/bin/python3`.
 
-Scenarios (all: exactly 1 change at Frankfurt(Main)Hbf, ICE/EC legs only, BC25, 2nd class):
+Scenarios (all: ≤ 2 changes anywhere, ≤ 6 h travel time, searched without via — since 17 Oct 2026; before: exactly 1 change
+at Frankfurt(Main)Hbf; ICE/EC legs only, BC25, 2nd class):
 R-out-Thu A→G Thu dep≥15:30 · R-out-Fri A→G Fri dep≥13:30 · R-back-Mon G→A Mon dep≤13:00 arr≤20:00 ·
 R-back-Sun G→A Sun dep≥16:00 · P-out-Fri G→A Fri dep≥14:00 · P-back-Sun A→G Sun dep≥16:00 ·
 P-back-Mon A→G Mon dep≤08:00. Cutoffs are assumptions; `--write-config scenarios.json` to edit.
@@ -59,6 +60,9 @@ Endpoints (unofficial, the ones the website itself calls; same on www.bahn.de an
 Route facts: Aachen→Göttingen via Frankfurt, 1 change, every 2 h: dep 07:38/09:38/11:38/13:38/15:38/17:38
 (ICE 11/13/15/315/17/317 → Frankfurt Hbf, 12–14 min transfer, ICE/ECE → Göttingen), arr xx:31, 3h53.
 Baseline 16 Oct with BC25: Mon 19 Oct €86.99–98.99, Tue €74.99–86.99, Wed €64.49–89.99 (Super Sparpreis).
+Sun 25 Oct 2026 (checked 17 Oct, search without via): NO 1-change Frankfurt connection in either direction —
+A→G needs 2 changes via Köln (e.g. 15:38 ICE 17 + ICE 653 + ICE 77, arr 20:25), G→A goes via Hannover or
+Frankfurt Süd + Bus X61. Cause not stated in the API's notices. That is why scenarios now allow ≤ 2 changes.
 Release time of the Last-Minute fare: DB page says only Sat+Sun; mydealz FAQ says "ab 0:01 Uhr" Saturday.
 
 ## Bot protection (Akamai Bot Manager) — what was established, 16 Oct 2026

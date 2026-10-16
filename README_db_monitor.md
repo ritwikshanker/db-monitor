@@ -1,4 +1,4 @@
-# DB fare monitor — weekly Aachen ⇄ Göttingen (1 change at Frankfurt)
+# DB fare monitor — weekly Aachen ⇄ Göttingen (≤ 2 changes)
 
 Goal: by 14 Nov 2026 know (a) whether Last-Minute Super Sparpreis fares appear for these
 connections, (b) at what time on Saturday, (c) at what price, (d) how fast they go. Afterwards
@@ -17,12 +17,14 @@ at/below your threshold.
 | P-back-Sun | Aachen Hbf → Göttingen | Sun | dep ≥ 16:00 (last trains) | partner |
 | P-back-Mon | Aachen Hbf → Göttingen | Mon | dep ≤ 08:00 (first train, ICE 11 07:38 → 11:31) | partner |
 
-All scenarios: exactly 1 change at a Frankfurt station, ICE/EC/IC legs only, 2nd class, 1 adult
-with BahnCard 25, threshold €20. Assumptions I made where you were vague — all editable in the
+All scenarios: at most 2 changes at any station (normally 1 at Frankfurt; on diversion days
+2 via Köln/Hannover — e.g. Sun 25 Oct 2026 had no 1-change Frankfurt connection at all), at most
+6 h travel time (drops overnight routings like 21:36 → 04:45), ICE/EC/IC legs only, 2nd class, 1 adult with BahnCard 25, threshold €20. Searched without a via station. Assumptions I made where you were vague — all editable in the
 JSON: "morning" = dep ≤ 13:00, "not super late" = arr ≤ 20:00, "half workday" = dep ≥ 14:00,
 "last train" = dep ≥ 16:00, "first train" = dep ≤ 08:00. Per-scenario overrides exist for
-`via`, `changes`, `long_distance_only`, `threshold_eur` (set `"via": ""` and `"changes": 2`
-to allow the Köln–Hannover routing, for example).
+`via`, `max_changes`, `max_duration_h` (0 = no cap), `long_distance_only`, `threshold_eur` (`"via": "Frankfurt(Main)Hbf"` and
+`"max_changes": 1` restore the old Frankfurt-only behaviour; a via is also sent to bahn.de as a
+forced intermediate stop).
 
 ## Booking slots — your Monday question
 
@@ -121,7 +123,8 @@ private in the topic name. The alert text is just scenario, date, trains, price.
 ## CSV columns (`db_prices.csv`, appended per run)
 
 `run_time` (Europe/Berlin), `scenario`, `route`, `travel_date`, `weekday`, `days_ahead`,
-`dep`, `arr` (`+1` = after midnight), `duration_min`, `trains`, `change_station`, `changes`,
+`dep`, `arr` (`+1` = after midnight), `duration_min`, `trains`, `change_station` (all change
+stations, `" / "`-separated), `changes`,
 `products`, `price_eur` (with BC25), `list_price_eur` (without BC — only where the offer
 lookup ran), `offer_name` (Super Sparpreis / Sparpreis / Flexpreis / whatever DB calls the
 Last-Minute fare), `offer_labels` (condition categories; an "Aktion"-type label is expected on

@@ -11,8 +11,8 @@ script never books.
 
 ## How it works
 
-- A **scenario** is a route (origin, destination, optional via station, exact number of
-  changes), a weekday and a departure/arrival time window. Seven are built in (outbound
+- A **scenario** is a route (origin, destination, optional via station, maximum number of
+  changes — 2 by default, maximum travel time — 6 h by default), a weekday and a departure/arrival time window. Seven are built in (outbound
   Thu/Fri, returns Sun/Mon, both directions); `--write-config scenarios.json` dumps them for
   editing.
 - Each run maps the scenarios onto the dates of the following week (the week Last-Minute fares
