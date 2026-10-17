@@ -53,7 +53,7 @@ returns and for weeks when no Last-Minute fare shows up.
   within 3 h of booking; BahnCard 25/50 → further 25 % off; season 9 May – 13 Dec 2026.
   From €6.99 list → €5.24 with BC25. Your €20 cap ≈ €26.65 list price.
 - Release time: DB does not state it. mydealz FAQ: "immer ab 0:01 Uhr" Saturday (secondary
-  source — the Sat 00:05 run confirms or refutes it).
+  source — the Sat 00:00 / 00:30 runs confirm or refute it).
 - Aachen → Göttingen via Frankfurt, every 2 h, same pattern each day: dep 07:38 / 09:38 /
   11:38 / 13:38 / 15:38 / 17:38 (ICE 11, 13, 15, 315, 17, 317 to Frankfurt Hbf, 12–14 min
   transfer, ICE/ECE on to Göttingen), arr xx:31, 3 h 53. The reverse pattern is captured
@@ -136,8 +136,10 @@ The offer lookup runs for the cheapest connection per scenario-day plus anything
 ## Schedule
 
 The run slots are built into the script (Europe/Berlin): Fri 20:00–23:00 hourly (baseline),
-Sat 00:00 / 00:15 / 00:30 / 00:45 (release expected ~00:01), Sat 01:00–12:00 hourly, Sat 18:00,
-Sun 09:00 and 18:00 — 24 runs per weekend × ~17 requests, 4 s apart, far below the limiter.
+Sat 00:00 / 00:30 (release expected ~00:01), Sat 01:00–12:00 hourly, Sat 18:00,
+Sun 09:00 and 18:00 — 21 runs per weekend × ~17 requests, 4 s apart, far below the limiter.
+Runs stay at least 30 min apart: on 17 Oct 2026 the 15-min cluster 00:00–00:45 had 3 of 4 runs
+blocked on `tagesbestpreis` (00:45 got no data at all), while no hourly run was blocked there.
 Cron just fires the script every 15 minutes and `--when-scheduled` makes it exit instantly
 unless the Berlin time is a slot. That way the same crontab line works on a laptop in India
 (IST) and on a Pi in Germany, and the 25 Oct clock change needs no attention

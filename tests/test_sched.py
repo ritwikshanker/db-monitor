@@ -9,7 +9,9 @@ B = ZoneInfo("Europe/Berlin"); IST = ZoneInfo("Asia/Kolkata")
 def b(y,mo,d,h,mi): return datetime(y,mo,d,h,mi,3,tzinfo=B)
 assert m.scheduled_now(b(2026,10,16,20,0)) and m.scheduled_now(b(2026,10,16,23,0))     # Fri 20,23
 assert not m.scheduled_now(b(2026,10,16,19,0)) and not m.scheduled_now(b(2026,10,16,20,15))
-assert all(m.scheduled_now(b(2026,10,17,0,mi)) for mi in (0,15,30,45))                  # Sat 00:xx
+assert m.scheduled_now(b(2026,10,17,0,0)) and m.scheduled_now(b(2026,10,17,0,30))      # Sat 00:00, 00:30
+assert not m.scheduled_now(b(2026,10,17,0,15)) and not m.scheduled_now(b(2026,10,17,0,45))
+assert len(m.RUN_SLOTS) == 21
 assert m.scheduled_now(b(2026,10,17,1,0)) and m.scheduled_now(b(2026,10,17,12,0)) and not m.scheduled_now(b(2026,10,17,13,0))
 assert m.scheduled_now(b(2026,10,17,18,0)) and not m.scheduled_now(b(2026,10,17,18,15))
 assert m.scheduled_now(b(2026,10,18,9,0)) and m.scheduled_now(b(2026,10,18,18,0)) and not m.scheduled_now(b(2026,10,19,9,0))

@@ -117,6 +117,9 @@ Open points:
   `*/15 * * * * cd ~/db-monitor && <conda python3> db_lastminute_monitor.py --when-scheduled --quiet --ntfy TOPIC >> monitor.log 2>&1`
   — works unchanged on IST laptop and on the Pi; `--show-schedule` prints slots in machine time.
   (macOS cron and Debian cron ignore `CRON_TZ`; that's why the gate is in the script.)
+- Keep slots ≥ 30 min apart. First weekend (17 Oct 2026): Sat 00:00/00:15/00:30/00:45 → 3 of 4 runs
+  blocked on `tagesbestpreis`, hourly runs never; `recon` was blocked after 4 retries in nearly every
+  run. Since then Sat midnight = 00:00 + 00:30 only (21 slots/weekend).
 - macOS cron needs Full Disk Access for folders under Documents/Desktop/Downloads; `~/db-monitor` avoids it.
   Mac must be awake at slot times (`caffeinate -s`, lid open, on power).
 - curl_cffi on conda-macOS: import `urllib.request` / preload CoreFoundation first, else

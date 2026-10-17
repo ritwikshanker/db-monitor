@@ -475,11 +475,12 @@ class Stations:
 
 # Run slots in Europe/Berlin time, as (weekday, hour, minute-rounded-to-15). Used by --when-scheduled:
 # cron fires the script every 15 min in whatever timezone the machine has; the script decides.
-# Fri 20-23 hourly (baseline before release), Sat 00:00/00:15/00:30/00:45 (release ~00:01?),
+# Fri 20-23 hourly (baseline before release), Sat 00:00/00:30 (release ~00:01?; 15-min spacing
+# drew OPS_BLOCKED on 17 Oct 2026, so no closer than 30 min),
 # Sat 01-12 hourly + 18:00 (sell-out), Sun 09:00 + 18:00.
 RUN_SLOTS = (
     {(4, h, 0) for h in range(20, 24)}
-    | {(5, 0, m) for m in (0, 15, 30, 45)}
+    | {(5, 0, 0), (5, 0, 30)}
     | {(5, h, 0) for h in range(1, 13)}
     | {(5, 18, 0)}
     | {(6, 9, 0), (6, 18, 0)}
